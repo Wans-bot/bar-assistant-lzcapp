@@ -1,0 +1,361 @@
+application:
+  subdomain: bar-assistant
+  upstreams:
+    - location: /api/
+      backend: http://bar-assistant:8080
+      disable_trim_location: true
+    - location: /search/
+      backend: http://meilisearch:7700
+    - location: /
+      backend: http://salt-rim:8080
+      disable_trim_location: true
+  injects:
+    # ── 免密登录 ─────────────────────────────────────────────────────────────
+    # Salt Rim 的登录页是一个 Vue SPA（/login，通常由客户端路由从 / 跳过去），
+    # 打开应用时如果逐个去填表单很容易「只填充、不提交」。因此用三层：
+    #   1) bar-bootstrap-login（主路径）：直接调 REST 接口注册（幂等）+ 登录，
+    #      把 token 写进 Salt Rim 客户端读取的状态键，然后刷新 —— 不需要表单、不需要点击。
+    #   2) bar-login-autofill：内置表单填充（兜底）。
+    #   3) bar-login-submit：等表单填好后点一次提交按钮（保证「填充也会提交」）。
+    # 三条都写 auth_required: false —— 默认 true 时没有合法 SAFE_UID 的上下文会把整条注入跳过。
+    - id: bar-bootstrap-login
+      'on': browser
+      auth_required: false
+      # 必须是 /*：SPA 客户端路由跳转到 /login 时文档不会重新加载，
+      # 只在 /login 上匹配的注入永远不会执行。脚本自己会先探测会话，已登录就什么都不做。
+      when:
+        - /*
+      do:
+        - src: |
+            (async () => {
+              // 凭据与 content/admin-init.sh 用同一组部署参数（同一段模板表达式），
+              // 保证「容器里注册的密码」== 「浏览器里自动登录的密码」。
+              // toJson 输出的是合法 JSON 字符串字面量，可安全嵌入 JS（含引号 / 反斜杠）。
+              const EMAIL = {{ if (index .U "admin_email") }}{{ index .U "admin_email" | toJson }}{{ else }}"baradmin@lazycat.local"{{ end }};
+              const PASSWORD = {{ if (index .U "admin_password") }}{{ index .U "admin_password" | toJson }}{{ else }}"{{ printf "%.32s" (stable_secret "BAR_ASSISTANT_ADMIN_PASSWORD") }}"{{ end }};
+              const NAME = {{ if (index .U "admin_name") }}{{ index .U "admin_name" | toJson }}{{ else }}"Bar Admin"{{ end }};
+
+              const readState = () => {
+                for (const store of [localStorage, sessionStorage]) {
+                  try {
+                    const raw = store.getItem("_salt_rim");
+                    if (raw) {
+                      const parsed = JSON.parse(raw);
+                      if (parsed) return parsed;
+                    }
+                  } catch (e) {}
+                }
+                return null;
+              };
+              // 已有 token + 用户即可视为已登录（bar 可能还没建，交给应用自己跳 /bars）。
+              const hasSession = (s) => !!(s && s.token && s.user && s.user.id != null);
+              const call = async (path, opts) => {
+                const res = await fetch("/api" + path, Object.assign({ headers: { accept: "application/json" } }, opts || {}));
+                let data = null;
+                try { data = await res.json(); } catch (e) {}
+                return { status: res.status, data };
+              };
+
+              try {
+                if (hasSession(readState())) return;
+
+                const authBody = (extra) =>
+                  Object.assign(
+                    { method: "POST", headers: { "content-type": "application/json", accept: "application/json" } },
+                    { body: JSON.stringify(extra) },
+                  );
+                const loginOnce = async () => {
+                  const r = await call("/auth/login", authBody({ email: EMAIL, password: PASSWORD }));
+                  return r && r.data && r.data.data && r.data.data.token;
+                };
+
+                // 先登录：账号通常已由容器 bar-init 建好，正常路径只发 200 请求，
+                // 不会因 4xx（如 register 已存在的 422）在控制台留下 Failed to load resource 报错。
+                let token = await loginOnce();
+                if (!token) {
+                  // 账号还不存在（全新机器 / bar-init 尚未跑完）：先注册（幂等）再登录。
+                  await call("/auth/register", authBody({ email: EMAIL, name: NAME, password: PASSWORD })).catch(() => null);
+                  token = await loginOnce();
+                }
+                if (!token) return; // 登录没成功：静默退出，交给表单兜底注入
+
+                const authHeaders = { accept: "application/json", authorization: "Bearer " + token };
+                const profile = await call("/profile", { headers: authHeaders });
+                const user = profile && profile.data && profile.data.data;
+                if (!user || user.id == null) return;
+
+                let bar = {};
+                try {
+                  const bars = await call("/bars", { headers: authHeaders });
+                  const list = (bars && bars.data && bars.data.data) || [];
+                  // 与客户端 useAuth() 一致：只有恰好一个酒吧时才自动选中；
+                  // 多个酒吧时留空，让应用自己跳 /bars 让用户选，不替用户决定。
+                  if (list.length === 1) bar = list[0];
+                } catch (e) {}
+
+                // 关键：Salt Rim 的 setBar() 会把 search_host 换成浏览器可用的地址；
+                // 直接把原始 bar 写进 storage 会绕过这一步，bar.search_host 就保留内部地址
+                // http://meilisearch:7700 → 页面会发 http 请求 → Mixed Content 控制台报错。
+                // 这里用与 setBar() 相同的规则归一化。
+                if (bar && bar.id != null) {
+                  let search = (window.srConfig && window.srConfig.MEILISEARCH_URL) || bar.search_host || "";
+                  if (!/^https?:\/\//.test(search)) {
+                    if (!search.startsWith("/")) search = "/" + search;
+                    search = location.origin + search;
+                  }
+                  bar.search_host = search;
+                }
+
+                const previous = readState() || {};
+                const state = Object.assign(
+                  {
+                    theme: "light",
+                    defaultUnit: "ml",
+                    defaultShelf: "bar",
+                    standardDrinkRegion: "uk",
+                    language: null,
+                    rememberMe: true,
+                    isPasswordLoginEnabled: true,
+                    isAiEnabled: false,
+                    isAiImageEnabled: false,
+                  },
+                  previous,
+                  { token, user, bar },
+                );
+                localStorage.setItem("sr_remember_login", "true");
+                localStorage.setItem("_salt_rim", JSON.stringify(state));
+                location.replace("/");
+              } catch (e) {}
+            })();
+    # 兜底 1：落在登录页时用内置脚本把 #email / #password 填好（只填不提交）。
+    - id: bar-login-autofill
+      'on': browser
+      auth_required: false
+      when:
+        - /*
+      do:
+        - src: builtin://simple-inject-password
+          params:
+            user: '{{ if (index .U "admin_email") }}{{ index .U "admin_email" }}{{ else }}baradmin@lazycat.local{{ end }}'
+            password: '{{ if (index .U "admin_password") }}{{ index .U "admin_password" }}{{ else }}{{ printf "%.32s" (stable_secret "BAR_ASSISTANT_ADMIN_PASSWORD") }}{{ end }}'
+            userSelector: '#email'
+            passwordSelector: '#password'
+            submitSelector: 'button[type="submit"]'
+            # 只负责填充；提交交给下面的 bar-login-submit，保证只点一次。
+            autoSubmit: false
+            retryCount: 20
+            observerTimeoutMs: 20000
+    # 兜底 2：Vue SPA 里「填好但不提交」是常见坑。这里等两个输入框都有值后，
+    # 点一次提交按钮；若 1 秒后还停在登录页，再 requestSubmit 一次。最多两次，绝不循环。
+    - id: bar-login-submit
+      'on': browser
+      auth_required: false
+      when:
+        - /*
+      do:
+        - src: |
+            (function () {
+              if (window.__barAutoSubmit) return;
+              window.__barAutoSubmit = true;
+              var attempts = 0;
+              var ticks = 0;
+              function submitOnce() {
+                var email = document.querySelector("#email");
+                var password = document.querySelector("#password");
+                if (!email || !password || !email.value || !password.value) return;
+                var form = email.closest("form") || document.querySelector("form");
+                var button =
+                  (form && form.querySelector('button[type="submit"], input[type="submit"]')) ||
+                  document.querySelector('button[type="submit"]');
+                attempts++;
+                try {
+                  if (attempts === 1 && button) {
+                    button.click();
+                  } else if (form && form.requestSubmit) {
+                    form.requestSubmit();
+                  } else if (button) {
+                    button.click();
+                  }
+                } catch (e) {}
+              }
+              var timer = setInterval(function () {
+                ticks++;
+                submitOnce();
+                if (attempts >= 2 || ticks > 60) clearInterval(timer);
+              }, 500);
+            })();
+    # 本应用有「导入 / 导出」（Settings 里的数据备份、配方导入），按官方要求接入懒猫网盘文件选择器：
+    #   1) request 阶段：把 /__lazycat_file_bridge/* 代理到网盘文件服务（保存到网盘用）
+    #   2) browser 阶段：把 <input type=file>、File System Access、下载 blob 的 <a download> 都接管到网盘选择器
+    # 两条都要显式 auth_required: false —— 默认 true 时没有合法 SAFE_UID 的上下文会把整条注入跳过。
+    - id: lazycat-file-bridge
+      'on': request
+      auth_required: false
+      when:
+        - /__lazycat_file_bridge/*
+      do:
+        - src: |
+            const bridgePrefix = "/__lazycat_file_bridge";
+            const requestHost = String(ctx.request.host || "")
+              .split(":")[0]
+              .toLowerCase();
+            const firstDot = requestHost.indexOf(".");
+            const method = String(ctx.request.method || "").toUpperCase();
+
+            if (
+              firstDot <= 0 ||
+              !requestHost.endsWith(".heiyu.space") ||
+              !["GET", "HEAD", "PUT"].includes(method)
+            ) {
+              ctx.response.send(
+                ["GET", "HEAD", "PUT"].includes(method) ? 400 : 405,
+                "Invalid LazyCat file bridge request",
+              );
+              return;
+            }
+
+            const boxDomain = requestHost.slice(firstDot + 1);
+            const fileOrigin = "https://file." + boxDomain;
+            const targetPath =
+              "/files/home" + ctx.request.path.slice(bridgePrefix.length);
+
+            ctx.headers.del("Origin");
+            ctx.headers.del("Referer");
+            ctx.proxy.to(fileOrigin, {
+              path: targetPath,
+              query: ctx.request.raw_query,
+              use_target_host: true,
+              timeout_ms: 120000,
+              on_fail: "error",
+            });
+    - id: open-save-chooser
+      'on': browser
+      auth_required: false
+      when:
+        - /*
+      do:
+        - src: >-
+            file:///lzcapp/pkg/content/lazycat-injects/lzc-file-chooser-inject.js
+          params:
+            diskRoot: /_lzc/files/home
+            fileBridgeRoot: /__lazycat_file_bridge
+            fallbackMime: application/octet-stream
+            locale: auto
+            hooks:
+              fileSystemAccess: true
+              fileInput: true
+              downloadAnchor: true
+            text:
+              zh-CN:
+                openTitle: 打开
+                saveTitle: 保存
+                cloudTab: 网盘文件
+                localTab: 本地文件
+                openLazyCat: 从懒猫打开
+                saveLazyCat: 保存至懒猫
+                cancel: 取消
+              en-US:
+                openTitle: Open
+                saveTitle: Save
+                cloudTab: Cloud files
+                localTab: Local files
+                openLazyCat: Open from LazyCat
+                saveLazyCat: Save to LazyCat
+                cancel: Cancel
+  health_check:
+    test_url: >-
+      http://bar-assistant.cloud.lazycat.app.bar-assistant.lzcapp:8080/api/auth/sso/providers
+    disable: false
+    start_period: 180s
+    timeout: 10s
+services:
+  # 首次初始化（幂等）：用应用自带的 register 接口建立管理员账号。
+  # 镜像就用应用自己的 server 镜像（自带 php + curl），只把 entrypoint 换成 shell 跑脚本；
+  # 脚本调的是**应用网络内部服务名** http://bar-assistant:8080（不是公网域名）。
+  # 凭据由部署参数渲染，与浏览器 inject 用的是同一组模板表达式。
+  # 脚本跑完常驻 sleep，healthcheck 恒为 true，容器保持 (healthy)。
+  bar-init:
+    image: registry.lazycat.cloud/wans/barassistant/server:3b122d6790b016bc
+    entrypoint: /bin/sh
+    command: /lzcapp/pkg/content/admin-init.sh
+    environment:
+      TZ: Asia/Shanghai
+      LZC_ADMIN_EMAIL: '{{ if (index .U "admin_email") }}{{ index .U "admin_email" }}{{ else }}baradmin@lazycat.local{{ end }}'
+      LZC_ADMIN_PASSWORD: '{{ if (index .U "admin_password") }}{{ index .U "admin_password" }}{{ else }}{{ printf "%.32s" (stable_secret "BAR_ASSISTANT_ADMIN_PASSWORD") }}{{ end }}'
+      LZC_ADMIN_NAME: '{{ if (index .U "admin_name") }}{{ index .U "admin_name" }}{{ else }}Bar Admin{{ end }}'
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'true'
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  bar-assistant:
+    image: registry.lazycat.cloud/wans/barassistant/server:3b122d6790b016bc
+    environment:
+      NGINX_HTTP_PORT: '8080'
+      NGINX_HTTPS_PORT: '8443'
+      SSL_MODE: 'off'
+      CACHE_DRIVER: file
+      SESSION_DRIVER: file
+      QUEUE_CONNECTION: sync
+      SCOUT_DRIVER: meilisearch
+      MEILISEARCH_HOST: http://meilisearch:7700
+      MEILISEARCH_KEY: masterKeyThatIsReallyReallyLong4Real
+      ALLOW_REGISTRATION: 'true'
+      ENABLE_PASSWORD_LOGIN: 'true'
+      TZ: Asia/Shanghai
+    binds:
+      - /lzcapp/var:/var/www/cocktails/storage/bar-assistant
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - php-fpm-healthcheck || exit 1
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+  meilisearch:
+    image: registry.lazycat.cloud/wans/getmeili/meilisearch:dd38dc1f21c6b2f6
+    environment:
+      MEILI_MASTER_KEY: masterKeyThatIsReallyReallyLong4Real
+      MEILI_NO_ANALYTICS: 'true'
+      MEILI_HTTP_ADDR: 0.0.0.0:7700
+    binds:
+      - /lzcapp/var/bar-meili:/meili_data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://127.0.0.1:7700/health >/dev/null 2>&1 || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+  salt-rim:
+    image: registry.lazycat.cloud/wans/barassistant/salt-rim:59564ce5ea7f6965
+    environment:
+      API_URL: ''
+      MEILISEARCH_URL: /search
+      DEFAULT_LOCALE: zh-CN
+      SALT_RIM_ENV: production
+      MAILS_ENABLED: 'false'
+      BILLING_TOKEN: ''
+      BILLING_ENABLED: 'false'
+      BILLING_ENV: ''
+      ANALYTICS_HOST: ''
+      ANALYTICS_DOMAIN: ''
+      ALLOW_REGISTRATION: 'true'
+      SENTRY_DSN: ''
+      REDIRECT_TO_SSO: 'false'
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          ! curl -fsS http://127.0.0.1:8080/config.js | grep -q "API_URL =
+          \"http"
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
