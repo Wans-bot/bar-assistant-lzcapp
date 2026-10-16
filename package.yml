@@ -1,0 +1,71 @@
+package: cloud.lazycat.app.bar-assistant
+version: 6.8.1-4
+name: Bar Assistant
+description: 自托管的居家酒吧管理助手：鸡尾酒配方库、库存、用料替代与评分。
+author: Karlomikus
+license: MIT
+homepage: https://github.com/karlomikus/bar-assistant
+min_os_version: 1.6.0
+permissions:
+  required:
+    - net.internet
+  optional: []
+locales:
+  zh-CN:
+    name: Bar Assistant 酒吧助手
+    description: 自托管的居家酒吧管理助手：内置鸡尾酒配方库，支持配方导入、库存管理、用料替代与评分，全部数据留在自己的微服上。
+    usage: |
+      Bar Assistant 用来管理鸡尾酒配方、家庭酒柜库存和用料预算。
+
+      登录（免密）：
+      - 打开应用会自动登录，不需要手打账号密码。账号就是安装时填的管理员邮箱与密码
+        （安装参数「管理员邮箱 / 管理员密码 / 管理员显示名」；留空则用默认值，密码由系统随机生成）。
+      - 想更换凭据时，在应用出入口的「配置 / 重新配置」里改部署参数即可。
+
+      首次使用：
+      1. 打开应用即进入已登录界面。第一次先创建一个酒柜（Bar）。
+      2. 建好酒柜后可浏览内置配方库，或用配方链接导入自己的配方。
+      3. 进「Settings」里设置用料单价、用料替代规则和计量单位，之后导入配方就能自动算成本。
+
+      常用操作：
+      - 配方：搜索、收藏、评分，用「用料替代」按你家里实际有的东西自动换算配方。
+      - 库存：登记家里现有的瓶子，配方页会提示缺哪几样、可以买什么。
+      - 备份：Settings 里可以导出/导入自己的数据。
+
+      说明：
+      - 数据库、配方缓存、上传的图片都保存在应用数据目录，重启和升级都不会丢。
+      - 应用完全运行在你的微服本地，不依赖任何外部服务。
+  en-US:
+    name: Bar Assistant
+    description: >-
+      A self-hosted home bar manager with a cocktail recipe library, inventory,
+      substitutes and ratings — all on your own box.
+    usage: |
+      Bar Assistant helps you keep track of cocktail recipes, your home bar
+      inventory and ingredient costs.
+
+      Sign-in (nothing to type):
+      - The app signs you in automatically. The account is the admin email and
+        password from the install parameters ("admin email / admin password /
+        admin display name"). Leave them empty to use the defaults; the password
+        is then generated randomly.
+      - To change the credentials, edit the deploy parameters under the app's
+        "Configure" entry.
+
+      Getting started:
+      1. The app opens already signed in. Create a bar (Bar) on the first screen.
+      2. Then browse the built-in recipe library or import recipes from a link.
+      3. Open "Settings" to set ingredient prices, substitutes and units;
+         imported recipes then get priced automatically.
+
+      Everyday use:
+      - Recipes: search, rate and favorite recipes, with substitutions for the
+        bottles you actually own.
+      - Inventory: track what is in the cabinet; recipe pages show what is
+        missing and what to buy.
+      - Backup: export and import your data from Settings.
+
+      Notes:
+      - The database, recipe cache and uploaded images are stored in the app
+        data directory and survive restarts and upgrades.
+      - Everything runs locally on your box; no external service is required.
