@@ -1,0 +1,52 @@
+# Bar Assistant 鸡尾酒配方库的 LPK 自动更新配置
+# 上游镜像：docker.io/barassistant/server，版本 6.x。
+# 只有 barassistant/server 跟随应用版本；salt-rim 与 meilisearch 是独立产品，不在此管理。
+version: 1
+
+project:
+  root: .
+  build_config: lzc-build.yml
+  package_file: package.yml
+  output: dist/bar-assistant.lpk
+  target_arch: amd64
+
+update:
+  strategy: publish
+  allow_downgrade: false
+  version_source:
+    type: image
+    image: server
+
+build:
+  run_buildscript: false
+
+images:
+  # bar-init 与 bar-assistant 用同一个上游镜像，两处都要跟
+  - id: server
+    target: service
+    service: bar-assistant
+    source: docker.io/barassistant/server
+    channel: stable
+    tag_regex: '^v?6\.\d+\.\d+$'
+    sort: semver
+    delivery:
+      mode: lazycat
+  - id: server-init
+    target: service
+    service: bar-init
+    source: docker.io/barassistant/server
+    channel: stable
+    tag_regex: '^v?6\.\d+\.\d+$'
+    sort: semver
+    delivery:
+      mode: lazycat
+
+stores:
+  official:
+    enabled: true
+    continue_if_newer_version: true
+    skip_if_version_exists: true
+    create_if_missing: false
+    changelog_locales: [zh, en]
+  private:
+    enabled: false
