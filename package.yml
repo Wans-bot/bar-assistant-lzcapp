@@ -1,5 +1,5 @@
 package: cloud.lazycat.app.bar-assistant
-version: 6.8.1-4
+version: 6.9.0
 name: Bar Assistant
 description: 自托管的居家酒吧管理助手：鸡尾酒配方库、库存、用料替代与评分。
 author: Karlomikus
@@ -38,8 +38,7 @@ locales:
   en-US:
     name: Bar Assistant
     description: >-
-      A self-hosted home bar manager with a cocktail recipe library, inventory,
-      substitutes and ratings — all on your own box.
+      A self-hosted home bar manager with a cocktail recipe library, inventory, substitutes and ratings — all on your own box.
     usage: |
       Bar Assistant helps you keep track of cocktail recipes, your home bar
       inventory and ingredient costs.

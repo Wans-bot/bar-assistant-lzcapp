@@ -275,7 +275,8 @@ services:
   # 凭据由部署参数渲染，与浏览器 inject 用的是同一组模板表达式。
   # 脚本跑完常驻 sleep，healthcheck 恒为 true，容器保持 (healthy)。
   bar-init:
-    image: registry.lazycat.cloud/wans/barassistant/server:3b122d6790b016bc
+    # upstream: docker.io/barassistant/server:6.9.0
+    image: registry.lazycat.cloud/wans/barassistant/server:962e2802d746faec
     entrypoint: /bin/sh
     command: /lzcapp/pkg/content/admin-init.sh
     environment:
@@ -291,9 +292,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-
   bar-assistant:
-    image: registry.lazycat.cloud/wans/barassistant/server:3b122d6790b016bc
+    # upstream: docker.io/barassistant/server:6.9.0
+    image: registry.lazycat.cloud/wans/barassistant/server:962e2802d746faec
     environment:
       NGINX_HTTP_PORT: '8080'
       NGINX_HTTPS_PORT: '8443'
@@ -353,8 +354,7 @@ services:
       test:
         - CMD-SHELL
         - >-
-          ! curl -fsS http://127.0.0.1:8080/config.js | grep -q "API_URL =
-          \"http"
+          ! curl -fsS http://127.0.0.1:8080/config.js | grep -q "API_URL = \"http"
       interval: 10s
       timeout: 5s
       retries: 6
