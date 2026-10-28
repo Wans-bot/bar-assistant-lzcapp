@@ -275,8 +275,8 @@ services:
   # 凭据由部署参数渲染，与浏览器 inject 用的是同一组模板表达式。
   # 脚本跑完常驻 sleep，healthcheck 恒为 true，容器保持 (healthy)。
   bar-init:
-    # upstream: docker.io/barassistant/server:6.9.1
-    image: registry.lazycat.cloud/wans/barassistant/server:b1b417f84bc21fb4
+    # upstream: docker.io/barassistant/server:6.10.0
+    image: registry.lazycat.cloud/wans/barassistant/server:1d10a02c4dd83d4a
     entrypoint: /bin/sh
     command: /lzcapp/pkg/content/admin-init.sh
     environment:
