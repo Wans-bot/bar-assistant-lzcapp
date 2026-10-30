@@ -1,5 +1,5 @@
 package: cloud.lazycat.app.bar-assistant
-version: 6.10.0
+version: 6.10.1
 name: Bar Assistant
 description: 自托管的居家酒吧管理助手：鸡尾酒配方库、库存、用料替代与评分。
 author: Karlomikus
